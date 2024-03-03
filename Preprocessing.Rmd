@@ -119,3 +119,226 @@ plot3 <- FeatureScatter(AT_root, feature1 = "nCount_RNA", feature2 = "percent.cl
 plot1 + plot2 + plot3
 ```
 
+# Dimension reduction
+
+```{r}
+# Histogram before normalization 
+
+hist(colSums(AT_root@assays$RNA),
+     breaks = 100,
+     main = "Library size before normalisation",
+     xlab = "Library size")
+
+```
+
+```{r}
+# Data normalization
+AT_root <- NormalizeData(AT_root)
+```
+
+```{r}
+# Histogram after normalization 
+
+hist(colSums(AT_root@assays$RNA),
+     breaks = 100,
+     main = "Library size after normalisation",
+     xlab = "Library size")
+
+```
+
+```{r fig.width=8}
+# Select 5000 most variable features 
+AT_root <- FindVariableFeatures(AT_root, selection.method = "vst", nfeatures = 5000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(AT_root), 10)
+
+# Plot variable features with and without labels
+plot1 <- VariableFeaturePlot(AT_root)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+
+```{r}
+# Scaling the data 
+
+all_genes <- rownames(AT_root)
+AT_root <- ScaleData(AT_root, features = all_genes)
+```
+
+```{r fig.height = 6}
+# Linear dimensional reduction
+AT_root <- RunPCA(AT_root, npcs = 100, features = VariableFeatures(object = AT_root))
+
+# Examine and visualize PCA results a few different ways
+print(AT_root[["pca"]], dims = 1:5, nfeatures = 5)
+
+# Visualize loadings
+VizDimLoadings(AT_root, dims = 1:2, reduction = "pca")
+```
+```{r}
+# 
+DimPlot(AT_root, reduction = "pca", cols = "black") + NoLegend()
+```
+```{r}
+# Elbow plot
+ElbowPlot(AT_root, ndims = 100)
+```
+
+```{r}
+AT_root <- RunUMAP(AT_root, dims = 1:10, reduction.name = "umap10")
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+DimPlot(AT_root, reduction = "umap10")
+```
+```{r}
+AT_root <- RunUMAP(AT_root, dims = 1:30, reduction.name = "umap30")
+
+DimPlot(AT_root, reduction = "umap30")
+```
+
+
+```{r}
+AT_root <- RunUMAP(AT_root, dims = 1:60, reduction.name = "umap60",  n.components = 2)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+DimPlot(AT_root, reduction = "umap60")
+```
+
+```{r}
+AT_root <- RunUMAP(AT_root, dims = NULL, n.components = 3, features = VariableFeatures(object = AT_root), reduction.name = "umap_all")
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+DimPlot(AT_root, reduction = "umap_all")
+```
+
+```{r}
+AT_root <- RunTSNE(AT_root, dims = 1:60, reduction.name = "tsne60")
+
+DimPlot(AT_root, reduction = "tsne60")
+```
+
+```{r}
+# Diffusion map
+
+# dmap <- DiffusionMap(AT_root@assays[["RNA"]]@layers[["scale.data"]], n_eigs = 3, n_pcs = 60)
+```
+
+```{r}
+FeaturePlot(object = AT_root, features = 'nFeature_RNA', reduction = 'pca')
+FeaturePlot(object = AT_root, features = 'nFeature_RNA', reduction = 'umap60')
+```
+
+```{r}
+FeaturePlot(object = AT_root, features = 'nCount_RNA', reduction = 'pca')
+FeaturePlot(object = AT_root, features = 'nCount_RNA', reduction = 'umap60')
+
+```
+
+```{r}
+FeaturePlot(object = AT_root, features = 'percent.mt', reduction = 'pca')
+FeaturePlot(object = AT_root, features = 'percent.mt', reduction = 'umap60')
+
+```
+
+```{r}
+FeaturePlot(object = AT_root, features = 'percent.clp', reduction = 'pca')
+FeaturePlot(object = AT_root, features = 'percent.clp', reduction = 'umap60')
+
+```
+
+# Clustering
+
+```{r}
+AT_root <- FindNeighbors(AT_root, dims = 1:60)
+AT_root <- FindClusters(AT_root, resolution = 0.5)
+```
+
+```{r}
+# Look at cluster IDs of the first 10 cells
+head(Idents(AT_root), 10)
+```
+
+```{r}
+
+DimPlot(AT_root, reduction = "umap60")
+```
+
+```{r}
+
+DimPlot(AT_root, reduction = "pca", dims = c(1,2))
+DimPlot(AT_root, reduction = "pca", dims = c(1,3))
+DimPlot(AT_root, reduction = "pca", dims = c(2,3))
+```
+
+```{r}
+
+DimPlot(AT_root, reduction = "tsne60")
+```
+
+```{r}
+
+DimPlot(AT_root, reduction = "umap_all", dims = c(1,2))
+DimPlot(AT_root, reduction = "umap_all", dims = c(2,3))
+DimPlot(AT_root, reduction = "umap_all", dims = c(1,3))
+
+```
+
+```{r}
+
+DimPlot(AT_root, reduction = "umap10")
+```
+# Finding differentially expressed features (cluster biomarkers)
+
+
+```{r}
+# tissue specific markers
+cluster_annot_denyer <- read_tsv("../data/Denyer2019/Cluster_annotation.txt")
+cluster_annot_scplant <- read_csv("../data/arabidopsis_thaliana.marker_fd.csv")
+
+```
+
+```{r}
+# Keep root data only, filter data
+cluster_annot_scplant <- cluster_annot_scplant[cluster_annot_scplant$tissue == "Root", ]
+cluster_annot_scplant <- select(cluster_annot_scplant, c('gene','name','clusterName'))
+```
+
+```{r}
+# find markers for every cluster compared to all remaining cells, report only the positive
+# ones
+AT_root_markers <- FindAllMarkers(AT_root, only.pos = TRUE)
+AT_root_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+```
+
+```{r}
+# Top 30 of genes based on highest average log fold change 
+cluster_annot_denyer_top30 <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
+```
+
+```{r}
+# Rename clusters
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Phloem parenchyma', 'Root stele', 'Companion cell', 'Sieve element', 'Phloem', 'Metaxylem', 'Protoxylem', 'Xylem', 'Root procambium', 'Phloem/Pericycle', 'Phloem pole pericycle', 'Xylem pole pericycle', 'Pericycle') = 'Stele'")
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Root hair'= 'Trichoblast'")
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Non-hair' = 'Atrichoblast'")
+
+```
+
+```{r}
+# Merge top 30 and scplant dataframes by gene 
+cluster_annot_merged <- merge(cluster_annot_denyer_top30, unique(cluster_annot_scplant), by="gene")
+```
+
+```{r}
+FeaturePlot(object = AT_root, features = 'AT1G02730', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT1G33090', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT1G55200', reduction = 'umap60')
+```
