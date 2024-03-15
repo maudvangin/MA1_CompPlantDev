@@ -1,5 +1,5 @@
 ---
-title: 'Preprocessing'
+title: 'Preprocessing_AT'
 author: 'Maud Van Ginneken'
 output:
   pdf_document:
@@ -40,7 +40,6 @@ R Packages we will need:
 ```{r}
 library("reticulate")
 library("SingleCellExperiment")
-#library("scater")
 library("Seurat")
 library("tidyverse")
 library("destiny")
@@ -50,8 +49,6 @@ library("gridExtra")
 library("pheatmap")
 library("tibble")
 library("reshape2")
-#library("slingshot")
-#library("tradeSeq")
 ```
 
 Python packages for PaCMAP (Pairwise Controlled Manifold Approximation)  (you can install these in the terminal (not console) in RStudio with 'pip install *package name*')
@@ -80,15 +77,18 @@ Ref: similar workflow (on the same dataset) in Python using Scanpy: https://trai
 # Data
 
 ```{r}
+set.seed(1679)
+```
+
+```{r}
 #Load dataset
-counts_wt <- read_csv("../data/Denyer2019/GSE123818_Root_single_cell_wt_datamatrix.csv.gz")
+counts_wt <- read_csv("/scratch/gent/472/vsc47291/MA1_CompPlantDev/data/Denyer2019/GSE123818_Root_single_cell_wt_datamatrix.csv.gz")
 ```
 
 ```{r}
 geneNames_wt <- counts_wt$...1
 counts_wt <- counts_wt[-c(1)]
 rownames(counts_wt) <- geneNames_wt
-
 ```
 
 # QC metrics, data normalization, scaling, feature selection
@@ -96,15 +96,11 @@ rownames(counts_wt) <- geneNames_wt
 ```{r}
 # Initialize the Seurat object with the raw (non-normalized data).
 AT_root <- CreateSeuratObject(counts = counts_wt, project = "AT_root")
-AT_root
-
 ```
 
 ```{r}
-# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
 AT_root[["percent.mt"]] <- PercentageFeatureSet(AT_root, pattern = "^ATM")
 AT_root[["percent.clp"]] <- PercentageFeatureSet(AT_root, pattern = "^ATC")
-
 
 # Visualize QC metrics as a violin plot
 VlnPlot(AT_root, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.clp"), ncol = 4)
@@ -117,19 +113,19 @@ VlnPlot(AT_root, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "perce
 plot1 <- FeatureScatter(AT_root, feature1 = "nCount_RNA", feature2 = "percent.mt")
 plot2 <- FeatureScatter(AT_root, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
 plot3 <- FeatureScatter(AT_root, feature1 = "nCount_RNA", feature2 = "percent.clp")
-plot1 + plot2 + plot3
+plot1
+plot2
+plot3
 ```
 
-# Dimension reduction
+## Data normalization
 
 ```{r}
 # Histogram before normalization 
-
 hist(colSums(AT_root@assays$RNA),
      breaks = 100,
      main = "Library size before normalisation",
      xlab = "Library size")
-
 ```
 
 ```{r}
@@ -144,8 +140,9 @@ hist(colSums(AT_root@assays$RNA),
      breaks = 100,
      main = "Library size after normalisation",
      xlab = "Library size")
-
 ```
+
+## Feature selection
 
 ```{r fig.width=8}
 # Select 5000 most variable features 
@@ -160,12 +157,15 @@ plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
 plot1 + plot2
 ```
 
+## Data scaling
+
 ```{r}
 # Scaling the data 
-
 all_genes <- rownames(AT_root)
 AT_root <- ScaleData(AT_root, features = all_genes)
 ```
+
+## Dimensional reduction
 
 ```{r fig.height = 6}
 # Linear dimensional reduction
@@ -179,7 +179,6 @@ VizDimLoadings(AT_root, dims = 1:2, reduction = "pca")
 ```
 
 ```{r}
-# 
 DimPlot(AT_root, reduction = "pca", cols = "black") + NoLegend()
 ```
 
@@ -190,43 +189,34 @@ ElbowPlot(AT_root, ndims = 100)
 
 ```{r}
 AT_root <- RunUMAP(AT_root, dims = 1:10, reduction.name = "umap10")
-
-# note that you can set `label = TRUE` or use the LabelClusters function to help label
-# individual clusters
-DimPlot(AT_root, reduction = "umap10")
+DimPlot(AT_root, reduction = "umap10", cols = "black")
 ```
 
 ```{r}
 AT_root <- RunUMAP(AT_root, dims = 1:30, reduction.name = "umap30")
-
-DimPlot(AT_root, reduction = "umap30")
+DimPlot(AT_root, reduction = "umap30", cols = "black")
 ```
 
 ```{r}
-AT_root <- RunUMAP(AT_root, dims = 1:60, reduction.name = "umap60",  n.components = 2)
+AT_root <- RunUMAP(AT_root, dims = 1:60, reduction.name = "umap60")
+#AT_root <- Idents(object = AT_root, id = AT_root@meta.data[["seurat_clusters"]])
+DimPlot(AT_root, reduction = "umap60", cols = "black")
 
-# note that you can set `label = TRUE` or use the LabelClusters function to help label
-# individual clusters
-DimPlot(AT_root, reduction = "umap60")
+FeaturePlot(AT_root, reduction = "umap60", features = AT2G03830)
 ```
 
 ```{r}
 AT_root <- RunUMAP(AT_root, dims = NULL, features = VariableFeatures(object = AT_root), reduction.name = "umap_all")
-
-# note that you can set `label = TRUE` or use the LabelClusters function to help label
-# individual clusters
-DimPlot(AT_root, reduction = "umap_all")
+DimPlot(AT_root, reduction = "umap_all", cols = "black")
 ```
 
 ```{r}
 AT_root <- RunTSNE(AT_root, dims = 1:60, reduction.name = "tsne60")
-
-DimPlot(AT_root, reduction = "tsne60")
+DimPlot(AT_root, reduction = "tsne60", cols = "black")
 ```
 
 ```{r}
 # Diffusion map
-
 # dmap <- DiffusionMap(AT_root@assays[["RNA"]]@layers[["scale.data"]], n_eigs = 3, n_pcs = 60)
 ```
 
@@ -270,9 +260,7 @@ DimPlot(AT_root, reduction = "umap60")
 ```
 
 ```{r}
-DimPlot(AT_root, reduction = "pca", dims = c(1,2))
-DimPlot(AT_root, reduction = "pca", dims = c(1,3))
-DimPlot(AT_root, reduction = "pca", dims = c(2,3))
+DimPlot(AT_root, reduction = "pca")
 ```
 
 ```{r}
@@ -280,13 +268,10 @@ DimPlot(AT_root, reduction = "tsne60")
 ```
 
 ```{r}
-
 DimPlot(AT_root, reduction = "umap_all")
-
 ```
 
 ```{r}
-
 DimPlot(AT_root, reduction = "umap10")
 ```
 
@@ -296,7 +281,6 @@ DimPlot(AT_root, reduction = "umap10")
 # tissue specific markers
 cluster_annot_denyer <- read_tsv("../data/Denyer2019/Cluster_annotation.txt")
 cluster_annot_scplant <- read_csv("../data/arabidopsis_thaliana.marker_fd.csv")
-
 ```
 
 ```{r}
@@ -306,8 +290,7 @@ cluster_annot_scplant <- select(cluster_annot_scplant, c('gene','name','clusterN
 ```
 
 ```{r}
-# find markers for every cluster compared to all remaining cells, report only the positive
-# ones
+# find markers for every cluster compared to all remaining cells, report only the positive ones
 AT_root_markers <- FindAllMarkers(AT_root, only.pos = TRUE)
 AT_root_markers %>%
     group_by(cluster) %>%
@@ -317,22 +300,24 @@ AT_root_markers %>%
 ```{r}
 # Top 30 of genes based on highest average log fold change 
 cluster_annot_denyer_top30 <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
+
+cluster_annot_denyer_top50 <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 50, wt = avg_log2FC)
 ```
 
 ```{r}
 # Rename clusters
-
 cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Phloem parenchyma', 'Root stele', 'Companion cell', 'Sieve element', 'Phloem', 'Metaxylem', 'Protoxylem', 'Xylem', 'Root procambium', 'Phloem/Pericycle', 'Phloem pole pericycle', 'Xylem pole pericycle', 'Pericycle') = 'Stele'")
 
 cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Root hair'= 'Trichoblast'")
 
 cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Non-hair' = 'Atrichoblast'")
 
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Stem cell niche', 'Lateral root primordia') = 'Meristematic cell'")
 ```
 
 ```{r}
 # Merge top 30 and scplant dataframes by gene 
-cluster_annot_merged <- merge(cluster_annot_denyer_top30, unique(cluster_annot_scplant), by="gene")
+cluster_annot_merged <- merge(cluster_annot_denyer_top50, unique(cluster_annot_scplant), by = "gene")
 ```
 
 ```{r}
@@ -370,7 +355,6 @@ ploidy_label=c("2C", "4C", "8C", "16C")
 ploidy[,1:10]
 ```
 
-
 ```{r}
 # Calculating the correlation coefficient of each cell to each reference expression profile and annotate the cell as the label that it has the highest correlation coefficient with.  
 ploidy_stat <- suppressWarnings(sapply(5:ncol(ploidy),
@@ -397,7 +381,6 @@ ploidy_maxp <-
 names(ploidy_max) <- ploidy_ident
 ```
 
-
 ```{r}
 # Store the annotation, correlation coefficient and the p-value in Seurat object
 AT_root@meta.data$ploidy.ID.P <- as.character(ploidy_ident)
@@ -416,20 +399,21 @@ palette <- c("#DCEDC8","#42B3D5","#FDEA6F","#CF4F29","#cccccc")
 AT_root$ploidy.ID.P <- factor(AT_root$ploidy.ID.P, levels=order[sort(match(unique(AT_root$ploidy.ID.P), order))])
 color <- palette
 
-ploidyplot12 <- DimPlot(AT_root, group.by="ploidy.ID.P", cols=color, reduction = 'umap60', dims = c(1,2)) + labs(x = "", y = "", title = "Ploidy levels")
+ploidyplot <- DimPlot(AT_root, group.by="ploidy.ID.P", cols=color, reduction = 'umap60', dims = c(1,2)) + labs(x = "", y = "", title = "Ploidy levels")
 
 #ploidyplot13 <- DimPlot(AT_root, group.by="ploidy.ID.P", cols=color, reduction = 'umap60', dims = c(1,3)) + labs(x = "", y = "", title = "Ploidy levels")
 
 #ploidyplot23 <- DimPlot(AT_root, group.by="ploidy.ID.P", cols=color, reduction = 'umap60', dims = c(2,3)) + labs(x = "", y = "", title = "Ploidy levels")
 
-ploidyplot12
+ploidyplot
 #ploidyplot13
 #ploidyplot23
+```
 
+```{r}
 # 3D plot
 
-library("rgl")
-
+#library("rgl")
 # Create a color vector based on the cluster information
 #ploidy_col <- c("2C" = "#DCEDC8", "4C" = "#42B3D5", "8C" = "#FDEA6F", "16C" = "#CF4F29", "unknown" = "#cccccc")
 
@@ -451,7 +435,6 @@ marker_counts <- sapply(unique(cluster_annot_scplant$clusterName), function(clus
 })
 ```
 
-
 ```{r}
 # Create a contingency table using xtabs
 cluster_matrix <- xtabs(~ cluster + clusterName, data = cluster_annot_merged)
@@ -468,8 +451,7 @@ cluster_marker_counts <- merge(cluster_df, marker_counts_df, by = "clusterName")
 cluster_matrix_norm <- acast(cluster_marker_counts, cluster ~ clusterName, value.var = "Freq_norm", fun.aggregate = sum)
 
 # Heatmap
-pheatmap(cluster_matrix_norm, display_numbers = TRUE)
-
+pheatmap(cluster_matrix_norm, display_numbers = cluster_matrix)
 ```
 ## Dotplot
 
@@ -498,7 +480,8 @@ genes <- list(Columella = c("AT4G00490", "AT1G23210", "AT5G57640"),
               Trichoblast = c("AT1G33090", "AT3G09330", "AT5G49270"),
               LateralRootCap = c("AT4G37160", "AT3G55930"), 
               QuiescentCenter = c("AT3G26120", "AT1G55200"), 
-              Pericycle = c("AT5G26930", "AT1G11330"))
+              Pericycle = c("AT5G26930", "AT1G11330"),
+              MitoticActivity = c("AT1G15570"))
 
 genes <- lapply(genes, function(x){unique(x)})
 
@@ -550,11 +533,10 @@ ploidyplot
 # Assigning cell type identity to clusters
 
 ```{r}
-new_cluster_ids <- c("Lateral/Columella Root Cap", "Lateral Root Cap", "Columella", "Trichoblast", "G2/M phase", "Stele", "Atrichoblast", "Epidermis", "Endodermis", "Cortex", "Stele", "Lateral/Columella Root Cap", "Epidermis/SC niche?", "(Lateral)Root Cap")
+new_cluster_ids <- c("Lateral Root Cap", "Meristematic cell", "Columella Root Cap", "Trichoblast", "G2/M phase", "Stele", "Atrichoblast", "Epidermis/Atrichoblast", "Endodermis", "Cortex", "Stele", "Columella Root Cap", "Lateral Root Cap", "Lateral Root Cap")
 names(new_cluster_ids) <- levels(AT_root)
 AT_root <- RenameIdents(AT_root, new_cluster_ids)
 DimPlot(AT_root, reduction = "umap60", label = TRUE, pt.size = 0.5) + NoLegend()
 ```
-
 
 # Convert subclusters to SingleCellExperiment for trajectory analysis
