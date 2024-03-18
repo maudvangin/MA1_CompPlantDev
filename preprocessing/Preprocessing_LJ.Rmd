@@ -18,17 +18,15 @@ knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, warning = FALSE,
 ```
 
 ```{r}
-library("reticulate")
-library("SingleCellExperiment")
+#library("SingleCellExperiment")
 library("Seurat")
 library("tidyverse")
-library("destiny")
-library("rgl")
-library("car")
-library("gridExtra")
+#library("rgl")
+#library("car")
+#library("gridExtra")
 library("pheatmap")
 library("tibble")
-library("reshape2")
+#library("reshape2")
 library("dplyr")
 ```
 \tableofcontents
@@ -118,15 +116,15 @@ hist(colSums(LJ_root@assays$RNA),
 
 ```{r}
 # Data normalization
-LJ_root <- NormalizeData(LJ_root)
+#LJ_root <- NormalizeData(LJ_root)
 ```
 
 ```{r}
 # Histogram after normalization 
-hist(colSums(LJ_root@assays$RNA),
-     breaks = 100,
-     main = "Library size after normalisation",
-     xlab = "Library size")
+#hist(colSums(LJ_root@assays$RNA),
+#     breaks = 100,
+#     main = "Library size after normalisation",
+#     xlab = "Library size")
 
 ```
 
@@ -171,17 +169,17 @@ ElbowPlot(LJ_root, ndims = 100)
 
 ```{r}
 LJ_root <- RunUMAP(LJ_root, dims = 1:10, reduction.name = "umap10")
-DimPlot(LJ_root, reduction = "umap10")
+DimPlot(LJ_root, reduction = "umap10", cols = "black")
 ```
 
 ```{r}
 LJ_root <- RunUMAP(LJ_root, dims = 1:30, reduction.name = "umap30")
-DimPlot(LJ_root, reduction = "umap30")
+DimPlot(LJ_root, reduction = "umap30", cols = "black")
 ```
 
 ```{r}
 LJ_root <- RunUMAP(LJ_root, dims = 1:60, reduction.name = "umap60")
-DimPlot(LJ_root, reduction = "umap60")
+DimPlot(LJ_root, reduction = "umap60", cols = "black")
 ```
 
 ```{r}
@@ -320,14 +318,13 @@ color <- palette
 
 ploidyplot <- DimPlot(LJ_root, group.by="ploidy.ID.P", cols=color, reduction = 'umap60', dims = c(1,2)) + labs(x = "", y = "", title = "Ploidy levels")
 
-pdf(file = "LJ_ploidyplot.pdf", width = 16, height = 16)
+pdf(file = "LJ_ploidyplot1.pdf", width = 16, height = 16)
 ploidyplot
 dev.off()
 ```
 
-######
 ```{r}
-FeaturePlot(LJ_root, reduction = "umap60", features = AT2G03830)
+FeaturePlot(LJ_root, reduction = "umap60", features = 'AT2G03830')
 ```
 
 ## Cluster annotation heatmap 

@@ -199,3 +199,12 @@ pdf(file = "LJ_ploidyplot2.pdf", width = 16, height = 16)
 ploidyplot
 dev.off()
 ```
+
+```{r}
+FeaturePlot(LJ_root, reduction = "umap60", features = 'AT2G03830')
+```
+
+```{r}
+SaveH5Seurat(LJ_root)
+#LoadH5Seurat(LJ_root)
+```

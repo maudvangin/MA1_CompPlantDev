@@ -149,7 +149,7 @@ hist(colSums(AT_root@assays$RNA),
 AT_root <- FindVariableFeatures(AT_root, selection.method = "vst", nfeatures = 5000)
 
 # Identify the 10 most highly variable genes
-top10 <- head(VariableFeatures(AT_root), 10)
+top10_AT <- head(VariableFeatures(AT_root), 10)
 
 # Plot variable features with and without labels
 plot1 <- VariableFeaturePlot(AT_root)
@@ -161,8 +161,8 @@ plot1 + plot2
 
 ```{r}
 # Scaling the data 
-all_genes <- rownames(AT_root)
-AT_root <- ScaleData(AT_root, features = all_genes)
+all_genes_AT <- rownames(AT_root)
+AT_root <- ScaleData(AT_root, features = all_genes_AT)
 ```
 
 ## Dimensional reduction
@@ -202,7 +202,7 @@ AT_root <- RunUMAP(AT_root, dims = 1:60, reduction.name = "umap60")
 #AT_root <- Idents(object = AT_root, id = AT_root@meta.data[["seurat_clusters"]])
 DimPlot(AT_root, reduction = "umap60", cols = "black")
 
-FeaturePlot(AT_root, reduction = "umap60", features = AT2G03830)
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT2G03830')
 ```
 
 ```{r}
@@ -312,7 +312,7 @@ cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "
 
 cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Non-hair' = 'Atrichoblast'")
 
-cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Stem cell niche', 'Lateral root primordia') = 'Meristematic cell'")
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Stem cell niche', 'Lateral root primordia', 'G2/M phase') = 'Meristematic cell'")
 ```
 
 ```{r}
@@ -351,7 +351,6 @@ ploidy <- Reduce(merge.rownames, list(endo_exp,processed_counts))
 ```{r}
 # Prepare customized label name (optional)
 ploidy_label=c("2C", "4C", "8C", "16C")
-
 ploidy[,1:10]
 ```
 
@@ -405,7 +404,9 @@ ploidyplot <- DimPlot(AT_root, group.by="ploidy.ID.P", cols=color, reduction = '
 
 #ploidyplot23 <- DimPlot(AT_root, group.by="ploidy.ID.P", cols=color, reduction = 'umap60', dims = c(2,3)) + labs(x = "", y = "", title = "Ploidy levels")
 
+pdf(file = "AT_ploidyplot.pdf", width = 16, height = 16)
 ploidyplot
+dev.off()
 #ploidyplot13
 #ploidyplot23
 ```
@@ -526,17 +527,25 @@ timezone <- DimPlot(AT_root, reduction = "umap60", group.by = "timezone.ID.P")+g
 ```
 
 ```{r}
+#pdf(file = "AT_timezoneplot.pdf", width = 16, height = 16)
 timezone
-ploidyplot
+#dev.off()
 ```
 
 # Assigning cell type identity to clusters
-
+!!!! check first
 ```{r}
-new_cluster_ids <- c("Lateral Root Cap", "Meristematic cell", "Columella Root Cap", "Trichoblast", "G2/M phase", "Stele", "Atrichoblast", "Epidermis/Atrichoblast", "Endodermis", "Cortex", "Stele", "Columella Root Cap", "Lateral Root Cap", "Lateral Root Cap")
+new_cluster_ids <- c("Lateral Root Cap", "Meristematic cell", "Columella (Root Cap)", "Trichoblast", "Meristematic cell", "Stele", "Atrichoblast", "Epidermis", "Endodermis", "Cortex", "Stele", "Root cap", "Root cap","Root cap")
 names(new_cluster_ids) <- levels(AT_root)
 AT_root <- RenameIdents(AT_root, new_cluster_ids)
 DimPlot(AT_root, reduction = "umap60", label = TRUE, pt.size = 0.5) + NoLegend()
 ```
+```{r}
+SaveH5Seurat(AT_root, overwrite = TRUE)
+#LoadH5Seurat(AT_root)
+```
+
+
+
 
 # Convert subclusters to SingleCellExperiment for trajectory analysis
