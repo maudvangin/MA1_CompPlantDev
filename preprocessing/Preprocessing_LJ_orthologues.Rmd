@@ -21,6 +21,7 @@ knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, warning = FALSE,
 #library("reticulate")
 #library("SingleCellExperiment")
 library("Seurat")
+library("SeuratDisk")
 library("tidyverse")
 #library("destiny")
 #library("rgl")
@@ -206,5 +207,6 @@ FeaturePlot(LJ_root, reduction = "umap60", features = 'AT2G03830')
 
 ```{r}
 SaveH5Seurat(LJ_root)
-#LoadH5Seurat(LJ_root)
+LJ_root <- LoadH5Seurat('/scratch/gent/472/vsc47291/MA1_CompPlantDev/preprocessing/LJ_root.h5Seurat')
+getwd()
 ```
