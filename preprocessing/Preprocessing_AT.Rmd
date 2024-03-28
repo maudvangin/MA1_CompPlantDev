@@ -297,10 +297,12 @@ AT_root_markers %>%
 ```
 
 ```{r}
-# Top 30 of genes based on highest average log fold change 
+# Top 30/50 of genes based on highest average log fold change 
 cluster_annot_denyer_top30 <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
 
 cluster_annot_denyer_top50 <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 50, wt = avg_log2FC)
+
+#cluster_annot_denyer_top50AT <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 50, wt = avg_log2FC)
 ```
 
 ```{r}
@@ -315,8 +317,16 @@ cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "
 ```
 
 ```{r}
-# Merge top 30 and scplant dataframes by gene 
+# Filter scplant data on lowest p-value per gene, then highest logFC
+scplant_filtered <- cluster_annot_scplant %>% distinct %>% group_by(gene) %>% top_n(-1, p_val_adj) %>% distinct %>% group_by(gene) %>% top_n(1, avg_log2FC)
+```
+
+```{r}
+# Merge top 50 and scplant dataframes by gene 
 cluster_annot_merged <- merge(cluster_annot_denyer_top50, unique(cluster_annot_scplant), by = "gene")
+
+# Merge top50 and filtered scplant dataframes by gene 
+cluster_annot_merged_f <- merge(cluster_annot_denyer_top50, scplant_filtered, by = "gene")
 ```
 
 ```{r}
@@ -428,6 +438,8 @@ ploidyplot
 
 ## Cluster annotation heatmap 
 
+### Non-filtered scplant
+
 ```{r}
 # Sum of marker genes for every cluster name 
 marker_counts <- sapply(unique(cluster_annot_scplant$clusterName), function(cluster) {
@@ -453,6 +465,7 @@ cluster_matrix_norm <- acast(cluster_marker_counts, cluster ~ clusterName, value
 # Heatmap
 pheatmap(cluster_matrix_norm, display_numbers = cluster_matrix)
 ```
+
 ## Dotplot
 
 ```{r fig.width = 8 fig.height = 6}
@@ -482,6 +495,8 @@ genes <- list(Columella = c("AT4G00490", "AT1G23210", "AT5G57640"),
               QuiescentCenter = c("AT3G26120", "AT1G55200"), 
               Pericycle = c("AT5G26930", "AT1G11330"),
               MitoticActivity = c("AT1G15570"))
+
+# Pericycle naar Stele? 
 
 genes <- lapply(genes, function(x){unique(x)})
 
@@ -553,7 +568,9 @@ SaveH5Seurat(AT_root, overwrite = TRUE)
 #AT_root <- LoadH5Seurat('/scratch/gent/472/vsc47291/MA1_CompPlantDev/preprocessing/AT_root.h5Seurat', assays = "RNA")
 ```
 
+```{r}
+#rm(celltype, counts_wt, endo_exp, Long, ploidy, ploidy_cor, ploidy_pvalue, ploidy_stat, ploidyplot, plot1, plot2, processed_counts, Rad, time, time_cor, time_pvalue, time_stat, timezone, color, geneNames_wt, new_cluster_ids, order, palette, ploidy_ident, ploidy_label, ploidy_max, ploidy_maxp, time_ident, time_label, time_max, time_maxp, top10_AT)
 
-
-
-# Convert subclusters to SingleCellExperiment for trajectory analysis
+#write_tsv(AT_root_markers, "AT_root_markers_save.tsv")
+AT_root_markers <- read.table(file = '/scratch/gent/472/vsc47291/MA1_CompPlantDev/preprocessing/AT_root_markers_save.tsv', sep = '\t', header = TRUE)
+```
