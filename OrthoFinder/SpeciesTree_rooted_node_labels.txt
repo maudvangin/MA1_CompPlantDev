@@ -1,0 +1,1 @@
+(((Lotus_japonicus:0.0622476,Phaseolus_vulgaris:0.255598)N3:0.149245,Theobroma_cacao:0.381287)N1:0.069664,((Eutrema_salsugineum:0.0793314,Arabidopsis_thaliana:0.0533368)N4:0.200406,((Malus_domestica_golden:0.546955,Cannabis_sativa_female:0.0662087)N6:0.468842,(Nicotiana_attenuata:3.00621e-06,Gossypium_raimondii:0.21868)N7:0.126575)N5:0.261803)N2:0.069664)N0;
