@@ -1,0 +1,616 @@
+---
+title: 'Preprocessing_AT'
+author: 'Maud Van Ginneken'
+output:
+  pdf_document:
+    number_sections: yes
+    keep_tex: yes
+  html_document:
+    df_print: paged
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, warning = FALSE, 
+                      message = FALSE, echo = FALSE, eval = TRUE, tidy = TRUE,
+                      fig.width = 6, fig.height = 3.5, purl = TRUE, 
+                      fig.show = "hold", fig.pos = "p")
+```
+
+R Packages we will need:
+
+```{r}
+#install.packages("reticulate")
+#install.packages("tidyverse")
+#install.packages("Seurat")
+#install.packages("pheatmap")
+```
+
+```{r}
+#if (!require("BiocManager", quietly = TRUE))
+    #install.packages("BiocManager")
+#BiocManager::install("SingleCellExperiment")
+#BiocManager::install("scater")
+#BiocManager::install("destiny")
+#BiocManager::install("slingshot")
+#BiocManager::install("tradeSeq")
+```
+
+```{r}
+library("Seurat")
+library("SeuratDisk")
+library("tidyverse")
+library("rgl")
+library("car")
+library("gridExtra")
+library("pheatmap")
+library("tibble")
+library("reshape2")
+library("ggplot2")
+```
+
+# Introduction
+
+We will use the Seurat 'ecosystem' in R for our preprocessing workflow:
+
+We create a Seurat object from a count matrix (a big matrix storing all RNA transcript counts for every cell). The object serves as a container that contains both data (like the count matrix) and analysis results (like PCA or clustering results) for a single-cell dataset. See: https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+
+Ref: similar workflow (on the same dataset) in Python using Scanpy: https://training.galaxyproject.org/training-material/topics/single-cell/tutorials/scrna-plant/tutorial.html
+
+# Load data
+
+```{r}
+set.seed(1679)
+options(Seurat.object.assay.version = "v5")
+```
+
+```{r}
+counts_wt <- read_csv("/scratch/gent/472/vsc47291/MA1_CompPlantDev/data/Denyer2019/GSE123818_Root_single_cell_wt_datamatrix.csv.gz")
+```
+
+```{r}
+geneNames_wt <- counts_wt$...1
+counts_wt <- counts_wt[-c(1)]
+rownames(counts_wt) <- geneNames_wt
+```
+
+# QC metrics, data normalization, scaling, feature selection
+
+## Quality control metrics 
+
+```{r}
+# Initialize the Seurat object with the raw (non-normalized data).
+AT_root <- CreateSeuratObject(counts = counts_wt, project = "AT_root")
+AT_root <- CreateSeuratObject(counts = AT_root@assays[["RNA"]]$counts, project = "AT_root")
+```
+
+```{r}
+AT_root[["percent.mt"]] <- PercentageFeatureSet(AT_root, pattern = "^ATM")
+AT_root[["percent.clp"]] <- PercentageFeatureSet(AT_root, pattern = "^ATC")
+
+# Visualize QC metrics as a violin plot
+VlnPlot(AT_root, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.clp"), ncol = 4)
+```
+
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(AT_root, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(AT_root, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot3 <- FeatureScatter(AT_root, feature1 = "nCount_RNA", feature2 = "percent.clp")
+plot1 + plot2 + plot3
+```
+
+## Data normalization
+
+Histogram before normalization 
+
+```{r}
+hist(colSums(AT_root@assays$RNA),
+     breaks = 100,
+     main = "Library size before normalisation",
+     xlab = "Library size")
+```
+
+Normalization
+
+```{r}
+# Data normalization
+AT_root <- NormalizeData(AT_root)
+```
+
+Histogram after normalisation
+
+```{r}
+# Histogram after normalization 
+
+hist(colSums(AT_root@assays$RNA),
+     breaks = 100,
+     main = "Library size after normalisation",
+     xlab = "Library size")
+```
+
+## Feature selection
+
+The 5000 most variable features are visualized 
+
+```{r fig.width=8}
+AT_root <- FindVariableFeatures(AT_root, selection.method = "vst", nfeatures = 5000)
+
+# Identify the 10 most highly variable genes
+top10_AT <- head(VariableFeatures(AT_root), 10)
+top10_AT
+
+# Plot variable features with and without labels
+plot1 <- VariableFeaturePlot(AT_root)
+plot2 <- LabelPoints(plot = plot1, points = top10_AT, repel = TRUE)
+plot1 + plot2
+```
+
+Feature plots of 10 most variable genes 
+
+```{r}
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT1G47600')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT3G22600')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT4G34970')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT1G51470')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT3G62680')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT1G13620')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT4G40090')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT1G20850')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT5G57625')
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT4G35350')
+```
+
+## Data scaling
+
+ScaleData scales and centers the data features in the dataset
+
+```{r}
+# Scaling the data 
+all_genes_AT <- rownames(AT_root)
+AT_root <- ScaleData(AT_root, features = all_genes_AT)
+```
+
+## Dimensionality reduction
+
+Linear dimensionality reduction (PCA)
+
+```{r fig.height = 6}
+AT_root <- RunPCA(AT_root, npcs = 100, features = VariableFeatures(object = AT_root))
+
+# Examine and visualize PCA results
+print(AT_root[["pca"]], dims = 1:5, nfeatures = 5)
+
+# Visualize loadings
+VizDimLoadings(AT_root, dims = 1:2, reduction = "pca")
+```
+
+```{r}
+DimPlot(AT_root, reduction = "pca", cols = "black") + NoLegend()
+```
+
+```{r}
+# Elbow plot
+ElbowPlot(AT_root, ndims = 100)
+```
+
+UMAP 
+
+```{r}
+AT_root <- RunUMAP(AT_root, dims = 1:60, reduction.name = "umap60")
+DimPlot(AT_root, reduction = "umap60", cols = "black")
+```
+
+Visualize Root meristem factor 8 on UMAP. 
+This gene is expressed mainly in the stem cell area and the innermost layer of central columella cells. 
+
+```{r}
+FeaturePlot(AT_root, reduction = "umap60", features = 'AT2G03830')
+```
+
+t-SNE (++)
+
+```{r}
+AT_root <- RunTSNE(AT_root, dims = 1:60, reduction.name = "tsne60")
+DimPlot(AT_root, reduction = "tsne60", cols = "black")
+```
+
+?
+
+```{r}
+FeaturePlot(object = AT_root, features = 'nFeature_RNA', reduction = 'pca')
+FeaturePlot(object = AT_root, features = 'nFeature_RNA', reduction = 'umap60')
+```
+
+```{r}
+FeaturePlot(object = AT_root, features = 'nCount_RNA', reduction = 'pca')
+FeaturePlot(object = AT_root, features = 'nCount_RNA', reduction = 'umap60')
+
+```
+
+```{r}
+FeaturePlot(object = AT_root, features = 'percent.mt', reduction = 'pca')
+FeaturePlot(object = AT_root, features = 'percent.mt', reduction = 'umap60')
+
+```
+
+```{r}
+FeaturePlot(object = AT_root, features = 'percent.clp', reduction = 'pca')
+FeaturePlot(object = AT_root, features = 'percent.clp', reduction = 'umap60')
+```
+
+# Clustering
+
+```{r}
+AT_root <- FindNeighbors(AT_root, dims = 1:60)
+AT_root <- FindClusters(AT_root, resolution = 0.5)
+```
+
+Look at the cluster identities of the first 10 cells
+
+```{r}
+head(Idents(AT_root), 10)
+```
+
+```{r}
+DimPlot(AT_root, reduction = "umap60") + labs(color = "Cluster", x = "PC1", y = "PC2")
+```
+
+```{r}
+DimPlot(AT_root, reduction = "pca") + labs(color = "Cluster", x = "PC1", y = "PC2")
+```
+
+```{r}
+DimPlot(AT_root, reduction = "tsne60") + labs(color = "cluster", x = "t-SNE1", y = "t-SNE2")
+```
+
+# Finding differentially expressed features (cluster biomarkers)
+
+```{r}
+# tissue specific markers
+# cluster_annot_denyer <- read_tsv("../data/Denyer2019/Cluster_annotation.txt")
+cluster_annot_scplant <- read_csv("../data/arabidopsis_thaliana.marker_fd.csv")
+```
+
+```{r}
+# Keep root data only, filter data
+cluster_annot_scplant <- cluster_annot_scplant[cluster_annot_scplant$tissue == "Root", ]
+cluster_annot_scplant <- select(cluster_annot_scplant, c('gene','name','clusterName', 'p_val_adj', 'avg_log2FC'))
+```
+
+find markers for every cluster compared to all remaining cells, report only the positive ones
+
+```{r}
+AT_root_markers <- FindAllMarkers(AT_root, only.pos = TRUE)
+AT_root_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+```
+
+```{r}
+# Top 30/50 of genes based on highest average log fold change 
+cluster_annot_denyer_top30 <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
+
+cluster_annot_denyer_top50 <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 50, wt = avg_log2FC)
+
+cluster_annot_denyer_top50AT <- AT_root_markers %>% group_by(cluster) %>% top_n(n = 50, wt = avg_log2FC)
+```
+
+Rename the clusters
+
+```{r}
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Phloem parenchyma', 'Root stele', 'Companion cell', 'Sieve element', 'Phloem', 'Metaxylem', 'Protoxylem', 'Xylem', 'Root procambium', 'Phloem/Pericycle', 'Phloem pole pericycle', 'Xylem pole pericycle', 'Pericycle') = 'Stele'")
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Root hair'= 'Trichoblast'")
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Non-hair' = 'Atrichoblast'")
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Stem cell niche', 'Lateral root primordia', 'G2/M phase') = 'Meristematic cell'")
+```
+
+Filster SCplant data on lowest p-value per gene, then highest logFC
+
+```{r}
+scplant_filtered <- cluster_annot_scplant %>% distinct %>% group_by(gene) %>% top_n(-1, p_val_adj) %>% distinct %>% group_by(gene) %>% top_n(1, avg_log2FC)
+```
+
+Merge top50 and scplant dataframes by gene 
+
+```{r}
+# Non-filtered
+cluster_annot_merged <- merge(cluster_annot_denyer_top50, unique(cluster_annot_scplant), by = "gene")
+
+# Filtered 
+cluster_annot_merged_f <- merge(cluster_annot_denyer_top50, scplant_filtered, by = "gene")
+```
+
+Visualize some marker genes 
+
+```{r}
+# CELLULOSE SYNTHASE-LIKE D5, cell plate formation
+FeaturePlot(object = AT_root, features = 'AT1G02730', reduction = 'umap60')
+
+# MATE efflux family protein, 
+FeaturePlot(object = AT_root, features = 'AT1G33090', reduction = 'umap60')
+
+# kinase with adenine nucleotide alpha hydrolases-like domain-containing protein
+FeaturePlot(object = AT_root, features = 'AT1G55200', reduction = 'umap60')
+```
+
+# Ploidy annotation
+
+```{r}
+#extract matrix of expression values
+processed_counts <- as.matrix(AT_root@assays$RNA$scale.data)
+```
+
+```{r}
+# Merge the reference expression profile with the normalized expression matrix of our sample  
+merge.rownames <- function (x,y){
+  dat <- merge(x = x, y = y, by = "row.names")
+  rownames(dat) <- dat$Row.names
+  dat <- dat[,-1]
+  return(dat)
+}
+
+load(file="../data/Shahan2022/endo_exp.RD")
+ploidy <- Reduce(merge.rownames, list(endo_exp,processed_counts))
+```
+
+```{r}
+# Prepare customized label name (optional)
+ploidy_label=c("2C", "4C", "8C", "16C")
+ploidy[,1:10]
+```
+
+```{r}
+# Calculating the correlation coefficient of each cell to each reference expression profile and annotate the cell as the label that it has the highest correlation coefficient with.  
+ploidy_stat <- suppressWarnings(sapply(5:ncol(ploidy),
+                                       function(i)
+                                         sapply(1:4,
+                                                function(j)
+                                                  cor.test(ploidy[, i], ploidy[, j], method = "pearson")[c(3, 4)])))
+
+ploidy_cor <- ploidy_stat[seq(2, nrow(ploidy_stat), 2), ]
+ploidy_pvalue <- ploidy_stat[seq(1, nrow(ploidy_stat) - 1, 2), ]
+
+ploidy_max <-
+  sapply(1:(ncol(ploidy) - 4), function(i)
+    max(as.numeric(ploidy_cor[, i])))
+
+ploidy_ident <-
+  sapply(1:(ncol(ploidy) - 4), function(i)
+    ploidy_label[which(as.numeric(ploidy_cor[, i]) == max(as.numeric(ploidy_cor[, i])))])
+
+ploidy_maxp <-
+  sapply(1:(ncol(ploidy) - 4), function(i)
+    as.numeric(ploidy_pvalue[, i])[which(as.numeric(ploidy_cor[, i]) == max(as.numeric(ploidy_cor[, i])))])
+
+names(ploidy_max) <- ploidy_ident
+```
+
+```{r}
+# Store the annotation, correlation coefficient and the p-value in Seurat object
+AT_root@meta.data$ploidy.ID.P <- as.character(ploidy_ident)
+AT_root@meta.data$ploidy.cor.P <- ploidy_max
+AT_root@meta.data$ploidy.pvalue.p <- ploidy_maxp
+
+# In case there is a cell with insufficient info for annotation, label them as unknown
+AT_root@meta.data$ploidy.ID.P[which(AT_root@meta.data$ploidy.ID.P=="character(0)")]="unknown"
+```
+
+```{r}
+options(repr.plot.width=10, repr.plot.height=8)
+order <- c("2C","4C","8C","16C","unknown")
+palette <- c("#DCEDC8","#42B3D5","#FDEA6F","#CF4F29","#cccccc")
+
+AT_root$ploidy.ID.P <- factor(AT_root$ploidy.ID.P, levels=order[sort(match(unique(AT_root$ploidy.ID.P), order))])
+color <- palette
+
+ploidyplot <- DimPlot(AT_root, group.by="ploidy.ID.P", cols=color, reduction = 'umap60', dims = c(1,2), pt.size = 1.5) + labs(color = "Ploidy", x = "UMAP1", y = "UMAP2", title = "") + theme(axis.title = element_text(size = 25), legend.text = element_text(size = 30), legend.title = element_text(size = 30), axis.line = element_line(size = 1), legend.key.size = unit(2.5, "lines"), axis.text = element_text(size = 20))
+ploidyplot
+
+pdf(file = "AT_ploidyplot.pdf", width = 16, height = 10)
+ploidyplot
+dev.off()
+```
+
+```{r}
+# Dividing cells, CYC1-1 marker 
+# Cyclin-dependent protein kinase CYCB1;1
+CYCB1 <- FeaturePlot(object = AT_root, features = 'AT4G37490', reduction = 'umap60') + labs(color = "Expression", x = "UMAP1", y = "UMAP2", title = "Cyclin-dependent protein kinase CYCB1;1")
+CYCB1
+
+pdf(file = "AT_CYCB1", width = 16, height = 10)
+CYCB1
+dev.off()
+```
+
+```{r}
+# 3D plot
+
+#library("rgl")
+# Create a color vector based on the cluster information
+#ploidy_col <- c("2C" = "#DCEDC8", "4C" = "#42B3D5", "8C" = "#FDEA6F", "16C" = "#CF4F29", "unknown" = "#cccccc")
+
+# Map the colors to the clusters
+#point_colors <- ploidy_col[AT_root$ploidy.ID.P]
+
+# 3D plot with colored data points
+#options(rgl.printRglwidget = TRUE)
+#plot3d(AT_root@reductions[["umap60"]]@cell.embeddings, asp = 1, pch = 16, col = point_colors)
+
+```
+
+# Growth phase annotation
+
+```{r}
+load(file="/scratch/gent/472/vsc47291/MA1_CompPlantDev/data/Shahan2022/Root_bulk_arabidopsis_curated.RD")
+```
+
+```{r}
+time <- Reduce(merge.rownames, list(time, processed_counts))
+```
+
+```{r}
+time_label=c("Elongation", "Maturation", "Meristem")
+```
+
+```{r}
+# Calculating the correlation coefficient of each cell to each reference expression profile and annotate the cell as the label that it has the highest correlation coefficient with.  
+time_stat <- suppressWarnings(
+  sapply(4:ncol(time), function(i) sapply(1:3, function(j) cor.test(time[,i],time[,j],method = "pearson")[c(3,4)]))
+  )
+
+time_cor <- time_stat[seq(2,nrow(time_stat),2),]
+time_pvalue <- time_stat[seq(1,nrow(time_stat)-1,2),]
+time_max <- sapply(1:(ncol(time)-3), function(i) max(as.numeric(time_cor[,i])))
+time_ident <- sapply(1:(ncol(time)-3), function(i) time_label[which(as.numeric(time_cor[,i])==max(as.numeric(time_cor[,i])))])
+time_maxp <- sapply(1:(ncol(time)-3), function(i) as.numeric(time_pvalue[,i])[which(as.numeric(time_cor[,i])==max(as.numeric(time_cor[,i])))])
+names(time_max) <- time_ident
+```
+
+```{r}
+AT_root@meta.data$timezone.ID.P <- as.character(time_ident)
+AT_root@meta.data$timezone.cor.P <- time_max
+AT_root@meta.data$timezone.pvalue.P <- time_maxp
+```
+
+```{r}
+timezone <- DimPlot(AT_root, reduction = "umap60", group.by = "timezone.ID.P", pt.size = 1.5) + labs(color = "Growth phase", x = "UMAP1", y = "UMAP2", title = "") + theme(axis.title = element_text(size = 25), legend.text = element_text(size = 30), legend.title = element_text(size = 30), axis.line = element_line(size = 1), legend.key.size = unit(2.5, "lines"), axis.text = element_text(size = 20))
+timezone
+
+pdf(file = "AT_timezone.pdf", width = 16, height = 10)
+timezone
+dev.off()
+```
+
+# Cell type annotation 
+
+Generate a heatmap to annotate clusters 
+
+```{r}
+# Sum of marker genes for every cluster name 
+marker_counts <- sapply(unique(cluster_annot_scplant$clusterName), function(cluster) {
+  length(unique(cluster_annot_scplant$gene[cluster_annot_scplant$clusterName == cluster]))
+})
+```
+
+```{r}
+# Create a contingency table using xtabs
+cluster_matrix <- xtabs(~ cluster + clusterName, data = cluster_annot_merged)[, -c(3, 10)]
+
+# Normalize table data 
+cluster_df <- as.data.frame(cluster_matrix)
+marker_counts_df <- as.data.frame(marker_counts) %>%
+  rownames_to_column(var = "clusterName") %>%
+  filter(clusterName != "G1/G0 phase" & clusterName != "S phase")
+
+cluster_marker_counts <- merge(cluster_df, marker_counts_df, by = "clusterName") %>%
+  transform(Freq_norm = round(Freq * 10000 / marker_counts))
+
+# Create matrix with the normalized counts 
+cluster_matrix_norm <- acast(cluster_marker_counts, cluster ~ clusterName, value.var = "Freq_norm", fun.aggregate = sum)
+
+# Heatmap
+hmap <- pheatmap(cluster_matrix_norm, display_numbers = ifelse(cluster_matrix > 0, cluster_matrix, ""), cellwidth = 40, cellheight = 30, angle_col = 45, fontsize_col = 20, fontsize_row= 15, fontsize_number = 15)
+hmap
+
+pdf(file = "AT_heatmap.pdf", width = 16, height = 10)
+hmap
+dev.off()
+```
+
+Generate a dotplot with independent markers 
+
+```{r fig.width = 8 fig.height = 6}
+# Used in last year's project
+genes <- list(QC = c("AT3G26120", "AT2G03830"), 
+              Cortex = c("AT1G62510", "AT1G09750"), 
+              Endodermis = c("AT5G57620"), 
+              Atrichoblast = c("AT1G79840"), 
+              Trichoblast = "AT5G49270", 
+              Columella = c("AT1G17400", "AT1G26870"), 
+              Phloem = c("AT1G79430"), 
+              Xylem = c("AT1G71930"), 
+              Stressed = c("AT4G35770", "AT1G15040", "AT2G43510"), 
+              Meristematic = c("AT4G37490", "AT4G37490", "AT4G32830", "AT3G05060", "AT2G42740"))
+
+genes <- lapply(genes, function(x){unique(x)})
+
+DotPlot(AT_root, features = genes, group.by = "seurat_clusters", cluster.idents = TRUE) +theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0))
+```
+
+```{r fig.width = 12 fig.height = 8}
+# My project
+genes <- list(Columella = c("AT4G00490", "AT1G23210", "AT5G57640"), 
+              Cortex = c("AT1G62510", "AT5G07990", "AT5G55250"), 
+              Endodermis = c("AT1G61590", "AT4G02090"), 
+              Atrichoblast = c("AT1G79840", "AT2G37260", "AT1G65310"), 
+              Trichoblast = c("AT1G33090", "AT3G09330", "AT5G49270"),
+              LateralRootCap = c("AT4G37160", "AT3G55930"), 
+              QuiescentCenter = c("AT3G26120", "AT1G55200"), 
+              Stele = c("AT5G26930", "AT1G11330"),
+              MitoticActivity = c("AT1G15570"))
+
+genes <- lapply(genes, function(x){unique(x)})
+
+AT_dp <- DotPlot(AT_root, features = genes, group.by = "seurat_clusters", cluster.idents = TRUE, scale = TRUE, dot.scale = 10) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0)) + theme(axis.title = element_text(size = 20), legend.text = element_text(size = 25), legend.title = element_text(size = 25), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 20), legend.box.spacing = unit(4, "lines"))
+AT_dp
+
+pdf(file = "AT_dp.pdf", width = 16, height = 10)
+AT_dp
+dev.off()
+```
+
+Assigning cell type identity to clusters based in heatmap and dotplot
+
+```{r}
+new_cluster_ids <- c("Lateral Root Cap1", "Meristematic cell1", "Lateral Root Cap2", "Trichoblast", "Meristematic cell2", "Stele1", "Atrichoblast", "Epidermis", "Endodermis", "Cortex", "Stele2", "Columella", "Lateral Root Cap3","Lateral Root Cap4")
+names(new_cluster_ids) <- levels(AT_root)
+
+AT_root <- RenameIdents(AT_root, new_cluster_ids)
+```
+
+Visualise clusters on UMAP, PCA and t-SNE
+
+```{r}
+AT_umap <-DimPlot(AT_root, reduction = "umap60", pt.size = 1.5) + labs(title = "", x = "UMAP1", y = "UMAP2") + theme(axis.title = element_text(size = 25), legend.text = element_text(size = 30), axis.line = element_line(size = 1), legend.key.size = unit(2.5, "lines"), axis.text = element_text(size = 20))
+AT_umap
+
+pdf(file = "AT_umap.pdf", width = 18, height = 10)
+AT_umap
+dev.off()
+```
+
+```{r}
+AT_pca <-DimPlot(AT_root, reduction = "pca", pt.size = 0.5) + labs(title = "", x = "PCA1", y = "PCA2")
+AT_pca
+
+pdf(file = "AT_pca.pdf", width = 16, height = 10)
+AT_pca
+dev.off()
+```
+
+```{r}
+AT_tsne <-DimPlot(AT_root, reduction = "tsne60", pt.size = 0.5) + labs(title = "", x = "t-SNE1", y = "t-SNE2")
+AT_tsne
+
+pdf(file = "AT_tsne.pdf", width = 16, height = 10)
+AT_tsne
+dev.off()
+```
+
+Save Seurat object and markers 
+
+```{r}
+SaveH5Seurat(AT_root, overwrite = TRUE)
+#AT_root <- LoadH5Seurat('/scratch/gent/472/vsc47291/MA1_CompPlantDev/preprocessing/AT_root.h5Seurat', assays = "RNA")
+```
+
+```{r}
+#write_tsv(AT_root_markers, "AT_root_markers_save.tsv")
+AT_root_markers <- read.table(file = '/scratch/gent/472/vsc47291/MA1_CompPlantDev/preprocessing/AT_root_markers_save.tsv', sep = '\t', header = TRUE)
+```

@@ -1,0 +1,692 @@
+---
+title: '2-Preprocessing_LJ'
+author: 'Maud Van Ginneken'
+output:
+  pdf_document:
+    number_sections: yes
+    keep_tex: yes
+  html_document:
+    df_print: paged
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, warning = FALSE, 
+                      message = FALSE, echo = FALSE, eval = TRUE, tidy = TRUE,
+                      fig.width = 6, fig.height = 3.5, purl = TRUE, 
+                      fig.show = "hold", fig.pos = "p")
+```
+
+```{r}
+library("Seurat")
+library("tidyverse")
+library("rgl")
+library("car")
+library("gridExtra")
+library("pheatmap")
+library("tibble")
+library("reshape2")
+library("dplyr")
+library("data.table")
+```
+
+\tableofcontents
+
+# Introduction
+
+We will use the Seurat 'ecosystem' in R for our preprocessing workflow:
+
+We create a Seurat object from a count matrix (a big matrix storing all RNA transcript counts for every cell). The object serves as a container that contains both data (like the count matrix) and analysis results (like PCA or clustering results) for a single-cell dataset. See: https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+
+Ref: similar workflow (on the same dataset) in Python using Scanpy: https://training.galaxyproject.org/training-material/topics/single-cell/tutorials/scrna-plant/tutorial.html
+
+# Data
+
+```{r}
+set.seed(1679)
+```
+
+# Load OrthoFinder orthologues and orthogroups 
+
+```{r}
+# Orthologues from OrthoFinder results 
+AT_LJ <- read.table(file = '/scratch/gent/472/vsc47291/MA1_CompPlantDev/data/Proteomes/primary_transcripts/OrthoFinder/Results_Mar05/Orthologues/Orthologues_Arabidopsis_thaliana/Arabidopsis_thaliana__v__Lotus_japonicus.tsv', sep = '\t', header = TRUE)
+
+# Extract one-to-one orthologues 
+AT_LJ_Orthologues <- subset(AT_LJ, !grepl(",", Arabidopsis_thaliana) & !grepl(",", Lotus_japonicus), select = -Orthogroup)
+```
+
+```{r}
+#Load dataset
+LJ_root <- readRDS("/scratch/gent/472/vsc47291/MA1_CompPlantDev/data/Frank2023/frank2023_counts.rds") 
+
+obj.list <- SplitObject(LJ_root, split.by = "Condition")
+
+# Create vector in which LJ gene names are replaced by AT orthologues 
+ljcounts <- obj.list[["Control"]]@assays[["RNA"]]@counts@Dimnames[[1]]
+
+ortho_names <- replace(ljcounts, which(ljcounts %in% AT_LJ_Orthologues$Lotus_japonicus), AT_LJ_Orthologues$Arabidopsis_thaliana[AT_LJ_Orthologues$Lotus_japonicus %in% ljcounts])
+
+# Replace Seurat gene name vectors by new vector containing AT orthologous gene names
+obj.list[["Control"]]@assays[["RNA"]]@counts@Dimnames[[1]] = ortho_names
+obj.list[["Control"]]@assays[["RNA"]]@data@Dimnames[[1]] = ortho_names
+rownames(obj.list[["Control"]]@assays[["RNA"]]@meta.features) = ortho_names
+
+LJ_root <- CreateSeuratObject(counts = obj.list[["Control"]]@assays[["RNA"]], project = "LJ_root")
+
+LJ_root_ <- readRDS("/scratch/gent/472/vsc47291/MA1_CompPlantDev/data/Frank2023/frank2023_counts.rds")  
+obj.list <- SplitObject(LJ_root_, split.by = "Condition")
+LJ_root$celltype.id.ref <- obj.list[["Control"]]@meta.data[["Type_Cluster"]]
+
+rm(LJ_root_)
+```
+
+# Dimensionality reduction
+
+```{r}
+# Histogram before normalization 
+hist(colSums(LJ_root@assays$RNA),
+     breaks = 100,
+     main = "Library size before normalisation",
+     xlab = "Library size")
+```
+
+```{r fig.width=8}
+# Select 5000 most variable features 
+LJ_root <- FindVariableFeatures(LJ_root, selection.method = "vst", nfeatures = 5000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(LJ_root), 10)
+
+# Plot variable features with and without labels
+plot1 <- VariableFeaturePlot(LJ_root)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+
+```{r}
+# Scaling the data 
+all_genes <- rownames(LJ_root)
+LJ_root <- ScaleData(LJ_root, features = all_genes)
+```
+
+```{r fig.height = 6}
+# Linear dimensionality reduction
+LJ_root <- RunPCA(LJ_root, npcs = 100, features = VariableFeatures(object = LJ_root))
+
+# Examine and visualize PCA results a few different ways
+print(LJ_root[["pca"]], dims = 1:5, nfeatures = 5)
+
+# Visualize loadings
+VizDimLoadings(LJ_root, dims = 1:2, reduction = "pca")
+```
+
+```{r}
+LJ_root <- RunUMAP(LJ_root, dims = 1:60, reduction.name = "umap60")
+DimPlot(LJ_root, reduction = "umap60")
+```
+
+```{r}
+FeaturePlot(LJ_root, reduction = "umap60", features = 'AT2G03830')
+```
+
+Save Seurat object
+
+```{r}
+SaveH5Seurat(LJ_root)
+LJ_root <- LoadH5Seurat('/scratch/gent/472/vsc47291/MA1_CompPlantDev/preprocessing/LJ_root.h5Seurat')
+```
+
+# Clustering
+
+```{r}
+LJ_root <- FindNeighbors(LJ_root, dims = 1:60)
+LJ_root <- FindClusters(LJ_root, resolution = 0.25)
+```
+
+```{r}
+# Look at cluster IDs of the first 10 cells
+head(Idents(LJ_root), 10)
+```
+
+```{r}
+DimPlot(LJ_root, reduction = "umap60")
+```
+
+```{r}
+DimPlot(AT_root, reduction = "pca")
+```
+
+# Finding differentially expressed features (cluster biomarkers)
+
+```{r}
+# tissue specific markers
+cluster_annot_denyer <- read_tsv("../data/Denyer2019/Cluster_annotation.txt")
+cluster_annot_scplant <- read_csv("../data/arabidopsis_thaliana.marker_fd.csv")
+```
+
+```{r}
+# Keep root data only, filter data
+cluster_annot_scplant <- cluster_annot_scplant[cluster_annot_scplant$tissue == "Root", ]
+cluster_annot_scplant <- select(cluster_annot_scplant, c('gene','name','p_val_adj', 'avg_log2FC', 'clusterName'))
+```
+
+```{r}
+# find markers for every cluster compared to all remaining cells, report only the positive ones
+LJ_root_markers <- FindAllMarkers(LJ_root, only.pos = TRUE)
+LJ_root_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+```
+
+```{r}
+# Top 30 and top 50 of only orthologous genes based on highest average log fold change
+# Filter on adjusted p-value < 0.5
+
+cluster_annot_denyer_top30 <- LJ_root_markers[grep("^A", rownames(LJ_root_markers)), ] %>% group_by(cluster) %>% filter(p_val_adj < 0.05) %>% top_n(n = 30, wt = avg_log2FC)
+
+cluster_annot_denyer_top50 <- LJ_root_markers[grep("^A", rownames(LJ_root_markers)), ] %>% group_by(cluster) %>% filter(p_val_adj < 0.05) %>% top_n(n = 50, wt = avg_log2FC)
+```
+
+```{r}
+# Rename clusters
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Phloem parenchyma', 'Root stele', 'Companion cell', 'Sieve element', 'Phloem', 'Metaxylem', 'Protoxylem', 'Xylem', 'Root procambium', 'Phloem/Pericycle', 'Phloem pole pericycle', 'Xylem pole pericycle', 'Pericycle') = 'Stele'")
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Root hair'= 'Trichoblast'")
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "'Non-hair' = 'Atrichoblast'")
+
+cluster_annot_scplant$clusterName <- recode(cluster_annot_scplant$clusterName, "c('Stem cell niche', 'Lateral root primordia', 'G2/M phase') = 'Meristematic cell'")
+```
+
+```{r}
+# Filter scplant data on lowest p-value per gene, then highest logFC
+scplant_filtered <- cluster_annot_scplant %>% distinct %>% group_by(gene) %>% top_n(-1, p_val_adj) %>% distinct %>% group_by(gene) %>% top_n(1, avg_log2FC)
+```
+
+```{r}
+# Merge top50 and scplant dataframes by gene 
+cluster_annot_merged <- merge(cluster_annot_denyer_top50, unique(cluster_annot_scplant), by = "gene")
+
+# Merge top50 and filtered scplant dataframes by gene 
+cluster_annot_merged_f <- merge(cluster_annot_denyer_top50, scplant_filtered, by = "gene")
+```
+
+```{r}
+FeaturePlot(object = LJ_root, features = 'AT1G02730', reduction = 'umap60')
+```
+
+# Assigning cell type identity to clusters
+
+## Annotate ploidy
+
+```{r}
+#extract matrix of expression values
+processed_counts <- as.matrix(LJ_root@assays$RNA$scale.data)
+```
+
+```{r}
+# Merge the reference expression profile with the normalized expression matrix of our sample  
+merge.rownames <- function (x,y){
+  dat <- merge(x = x, y = y, by = "row.names")
+  rownames(dat) <- dat$Row.names
+  dat <- dat[,-1]
+  return(dat)
+}
+
+load(file="../data/Shahan2022/endo_exp.RD")
+ploidy <- Reduce(merge.rownames, list(endo_exp,processed_counts))
+```
+
+```{r}
+# Prepare customized label name (optional)
+ploidy_label=c("2C", "4C", "8C", "16C")
+ploidy[,1:10]
+```
+
+```{r}
+# Calculating the correlation coefficient of each cell to each reference expression profile and annotate the cell as the label that it has the highest correlation coefficient with.  
+ploidy_stat <- suppressWarnings(sapply(5:ncol(ploidy),
+                                       function(i)
+                                         sapply(1:4,
+                                                function(j)
+                                                  cor.test(ploidy[, i], ploidy[, j], method = "pearson")[c(3, 4)])))
+
+ploidy_cor <- ploidy_stat[seq(2, nrow(ploidy_stat), 2), ]
+ploidy_pvalue <- ploidy_stat[seq(1, nrow(ploidy_stat) - 1, 2), ]
+
+ploidy_max <-
+  sapply(1:(ncol(ploidy) - 4), function(i)
+    max(as.numeric(ploidy_cor[, i])))
+
+ploidy_ident <-
+  sapply(1:(ncol(ploidy) - 4), function(i)
+    ploidy_label[which(as.numeric(ploidy_cor[, i]) == max(as.numeric(ploidy_cor[, i])))])
+
+ploidy_maxp <-
+  sapply(1:(ncol(ploidy) - 4), function(i)
+    as.numeric(ploidy_pvalue[, i])[which(as.numeric(ploidy_cor[, i]) == max(as.numeric(ploidy_cor[, i])))])
+
+names(ploidy_max) <- ploidy_ident
+```
+
+```{r}
+# Store the annotation, correlation coefficient and the p-value in Seurat object
+LJ_root@meta.data$ploidy.ID.P <- as.character(ploidy_ident)
+LJ_root@meta.data$ploidy.cor.P <- ploidy_max
+LJ_root@meta.data$ploidy.pvalue.p <- ploidy_maxp
+
+# In case there is a cell with insufficient info for annotation, label them as unknown
+LJ_root@meta.data$ploidy.ID.P[which(LJ_root@meta.data$ploidy.ID.P=="character(0)")]="unknown"
+```
+
+```{r}
+options(repr.plot.width=10, repr.plot.height=8)
+order <- c("2C","4C","8C","16C","unknown")
+palette <- c("#DCEDC8","#42B3D5","#FDEA6F","#CF4F29","#cccccc")
+
+LJ_root$ploidy.ID.P <- factor(LJ_root$ploidy.ID.P, levels=order[sort(match(unique(LJ_root$ploidy.ID.P), order))])
+color <- palette
+
+ploidyplot <- DimPlot(LJ_root, group.by="ploidy.ID.P", cols=color, reduction = 'umap60', dims = c(1,2)) + labs(x = "", y = "", title = "Ploidy levels")
+
+#pdf(file = "LJ_ploidyplot.pdf", width = 16, height = 16)
+ploidyplot
+#dev.off()
+```
+
+## Annotate growth phase 
+
+```{r}
+load(file="/scratch/gent/472/vsc47291/MA1_CompPlantDev/data/Shahan2022/Root_bulk_arabidopsis_curated.RD")
+```
+
+```{r}
+time <- Reduce(merge.rownames, list(time, processed_counts))
+```
+
+```{r}
+time_label=c("Elongation", "Maturation", "Meristem")
+```
+
+```{r}
+# Calculating the correlation coefficient of each cell to each reference expression profile and annotate the cell as the label that it has the highest correlation coefficient with.  
+time_stat <- suppressWarnings(
+  sapply(4:ncol(time), function(i) sapply(1:3, function(j) cor.test(time[,i],time[,j],method = "pearson")[c(3,4)]))
+  )
+
+time_cor <- time_stat[seq(2,nrow(time_stat),2),]
+time_pvalue <- time_stat[seq(1,nrow(time_stat)-1,2),]
+time_max <- sapply(1:(ncol(time)-3), function(i) max(as.numeric(time_cor[,i])))
+time_ident <- sapply(1:(ncol(time)-3), function(i) time_label[which(as.numeric(time_cor[,i])==max(as.numeric(time_cor[,i])))])
+time_maxp <- sapply(1:(ncol(time)-3), function(i) as.numeric(time_pvalue[,i])[which(as.numeric(time_cor[,i])==max(as.numeric(time_cor[,i])))])
+names(time_max) <- time_ident
+```
+
+```{r}
+LJ_root@meta.data$timezone.ID.P <- as.character(time_ident)
+LJ_root@meta.data$timezone.cor.P <- time_max
+LJ_root@meta.data$timezone.pvalue.P <- time_maxp
+```
+
+```{r}
+timezone <- DimPlot(LJ_root, reduction = "umap60", group.by = "timezone.ID.P")+ggtitle("Correlation-based timezone annotation")
+```
+
+```{r}
+#pdf(file = "LJ_timezoneplot.pdf", width = 16, height = 16)
+timezone
+#dev.off()
+```
+
+## Cluster annotation heatmap 
+
+### No filtering of scplant
+
+```{r}
+# Sum of marker genes for every cluster name 
+marker_counts <- sapply(unique(cluster_annot_scplant$clusterName), function(cluster) {
+  length(unique(cluster_annot_scplant$gene[cluster_annot_scplant$clusterName == cluster]))
+})
+```
+
+```{r}
+# Create a contingency table using xtabs
+cluster_matrix <- xtabs(~ cluster + clusterName, data = cluster_annot_merged)[, -c(3, 10)]
+
+# Normalize table data 
+cluster_df <- as.data.frame(cluster_matrix)
+marker_counts_df <- as.data.frame(marker_counts) %>%
+  rownames_to_column(var = "clusterName") %>%
+  filter(clusterName != "G1/G0 phase" & clusterName != "S phase")
+
+cluster_marker_counts <- merge(cluster_df, marker_counts_df, by = "clusterName") %>%
+  transform(Freq_norm = round(Freq * 10000 / marker_counts))
+
+# Create matrix with the normalized counts 
+cluster_matrix_norm <- acast(cluster_marker_counts, cluster ~ clusterName, value.var = "Freq_norm", fun.aggregate = sum)
+
+# Heatmap
+hmap_unfiltered <- pheatmap(cluster_matrix_norm, display_numbers = ifelse(cluster_matrix > 0, cluster_matrix, ""), cellwidth = 40, cellheight = 30, angle_col = 45, fontsize_col = 20, fontsize_row= 15, fontsize_number = 15)
+hmap_unfiltered
+
+pdf(file = "LJ_heatmap_unfiltered.pdf", width = 16, height = 10)
+hmap_unfiltered
+dev.off()
+```
+
+### Filtered scplant
+
+```{r}
+# Sum of marker genes for every cluster name 
+marker_counts <- sapply(unique(scplant_filtered$clusterName), function(cluster) {
+  length(unique(scplant_filtered$gene[scplant_filtered$clusterName == cluster]))
+})
+```
+
+```{r}
+# Create a contingency table using xtabs
+cluster_matrix <- xtabs(~ cluster + clusterName, data = cluster_annot_merged_f)[, -c(3, 10)]
+
+# Normalize table data 
+cluster_df <- as.data.frame(cluster_matrix)
+marker_counts_df <- as.data.frame(marker_counts) %>%
+  rownames_to_column(var = "clusterName") %>%
+  filter(clusterName != "G1/G0 phase" & clusterName != "S phase")
+
+cluster_marker_counts <- merge(cluster_df, marker_counts_df, by = "clusterName") %>%
+  transform(Freq_norm = round(Freq * 10000 / marker_counts))
+
+# Create matrix with the normalized counts 
+cluster_matrix_norm <- acast(cluster_marker_counts, cluster ~ clusterName, value.var = "Freq_norm", fun.aggregate = sum)
+
+# Heatmap
+hmap_filtered <- pheatmap(cluster_matrix_norm, display_numbers = ifelse(cluster_matrix > 0, cluster_matrix, ""), cellwidth = 40, cellheight = 30, angle_col = 45, fontsize_col = 20, fontsize_row= 15, fontsize_number = 15)
+hmap_filtered
+hmap_filtered
+
+pdf(file = "LJ_heatmap_filtered.pdf", width = 16, height = 10)
+hmap_filtered
+dev.off()
+```
+
+## Dotplot 
+
+```{r}
+# Check which curated markers are present in the Orthologues 
+curated_markers <- read_csv("/scratch/gent/472/vsc47291/MA1_CompPlantDev/data/Curated_Markers.csv")
+
+present_markers <- inner_join(curated_markers, AT_LJ_Orthologues, by = c('Locus' = 'Arabidopsis_thaliana'))
+```
+
+```{r}
+LJ_root <- FindSubCluster(LJ_root, c(1), graph.name = "RNA_snn", subcluster.name = "sub.cluster.1", resolution = 0.15, algorithm = 1)
+```
+
+```{r}
+# Marker genes: waar had ik ze weer gehaald? 
+genes <- list(Columella = c("LotjaGi1g1v0475800", "AT3G60650"), 
+              Cortex = c("LotjaGi4g1v0207900", "LotjaGi4g1v0331000", "LotjaGi1g1v0628100"), 
+              Endodermis = c("AT1G61590", "AT5G57620", "LotjaGi5g1v0099800"), 
+              Atrichoblast = c("AT1G79840", "AT2G37260", "AT1G68470"), 
+              Trichoblast = c("LotjaGi1g1v0651300", "LotjaGi5g1v0271500", "LotjaGi6g1v0059900"),
+              LateralRootCap = c("AT5G36880", "LotjaGi4g1v0109600"), 
+              Meristem = c("AT3G26120", "LotjaGi3g1v0534800", "LotjaGi1g1v0659100"),
+              Stele = c("AT5G26930", "AT1G79430", "AT5G62940", "AT2G37090", "AT5G12870", "LotjaGi6g1v0342900", "LotjaGi1g1v0569300"))
+
+genes_vector <- c("LotjaGi1g1v0475800", "AT3G60650", "LotjaGi4g1v0207900", "LotjaGi4g1v0331000", "AT1G61590", "AT5G57620", "LotjaGi5g1v0099800", "AT1G79840", "AT2G37260", "AT1G68470", "LotjaGi1g1v0651300", "LotjaGi5g1v0271500", "AT5G36880", "LotjaGi4g1v0109600", "AT3G26120", "AT5G26930", "AT1G79430", "AT5G62940", "AT2G37090", "AT5G12870", "LotjaGi6g1v0342900")
+
+# LotjaGi1g1v0475800 = AT4G00490
+# LotjaGi4g1v0207900 = AT1G62510
+# LotjaGi4g1v0331000 = AT5G07990
+# LotjaGi5g1v0099800 = AT3G11550
+# LotjaGi1g1v0651300 = AT1G33090
+# LotjaGi5g1v0271500 = AT3G09330
+# LotjaGi4g1v0109600 = AT4G37160
+# LotjaGi6g1v0342900 = AT1G11330
+
+ATgenes_vector <- c("AT4G00490", "AT3G60650", "AT1G62510", "AT5G07990", "AT1G61590", "AT5G57620", "AT3G11550", "AT1G79840", "AT2G37260", "AT1G68470", "AT1G33090", "AT3G09330", "AT5G36880", "AT4G37160", "AT3G26120", "AT5G26930", "AT1G79430", "AT5G62940", "AT2G37090", "AT5G12870", "AT1G11330")
+
+genes <- lapply(genes, function(x){unique(x)})
+```
+
+Endodermis markers AT
+```{r}
+LJ_AT1G61590 <- FeaturePlot(LJ_root, reduction = "umap60", features = 'AT1G61590', pt.size = 2) + labs(title = "AT1G61590", x = "UMAP1", y = "UMAP2") + theme(axis.title = element_text(size = 25), legend.text = element_text(size = 30), axis.line = element_line(size = 1), legend.key.size = unit(2.5, "lines"), axis.text = element_text(size = 20)) 
+
+AT_AT1G61590 <- FeaturePlot(AT_root, reduction = "umap60", features = 'AT1G61590', pt.size = 2) + labs(title = "AT1G61590", x = "UMAP1", y = "UMAP2") + theme(axis.title = element_text(size = 25), legend.text = element_text(size = 30), axis.line = element_line(size = 1), legend.key.size = unit(2.5, "lines"), axis.text = element_text(size = 20))
+
+AT_AT1G61590 + LJ_AT1G61590
+
+pdf(file = "AT_AT1G61590.pdf", width = 18, height = 10)
+AT_AT1G61590
+dev.off()
+
+pdf(file = "LJ_AT1G61590.pdf", width = 18, height = 10)
+LJ_AT1G61590
+dev.off()
+```
+
+
+```{r fig.width=12, fig.height=8}
+LJ_dotplot1 <- DotPlot(LJ_root, features = genes, group.by = "seurat_clusters", cluster.idents = TRUE, cols = c("red", "blue"), scale = TRUE, dot.scale = 20) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0), axis.title = element_text(size = 30), legend.text = element_text(size = 35), legend.title = element_text(size = 35), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 30), legend.box.spacing = unit(4, "lines"))
+
+LJ_dotplot1
+
+pdf(file = "LJ_dotplot_curated_scaled.pdf", width = 30, height = 15)
+LJ_dotplot1
+dev.off()
+```
+
+```{r fig.width=12, fig.height=8}
+LJ_dotplot2 <- DotPlot(LJ_root, features = genes, group.by = "seurat_clusters", cluster.idents = TRUE, cols = c("grey", "blue"), scale = FALSE, dot.scale = 20) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0), axis.title = element_text(size = 30), legend.text = element_text(size = 35), legend.title = element_text(size = 35), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 30), legend.box.spacing = unit(4, "lines"))
+
+LJ_dotplot2
+
+pdf(file = "LJ_dotplot_curated.pdf", width = 30, height = 15)
+LJ_dotplot2
+dev.off()
+```
+
+```{r fig.width=12, fig.height=8}
+LJ_dotplot3 <- DotPlot(LJ_root, features = genes, group.by = "sub.cluster.1", cluster.idents = TRUE, cols = c("red", "blue"), scale = TRUE, dot.scale = 20) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0), axis.title = element_text(size = 30), legend.text = element_text(size = 35), legend.title = element_text(size = 35), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 30), legend.box.spacing = unit(4, "lines"))
+
+LJ_dotplot3
+
+pdf(file = "LJ_dotplot_curated_subclusters_scaled.pdf", width = 30, height = 15)
+LJ_dotplot3
+dev.off()
+```
+
+```{r fig.width=12, fig.height=8}
+LJ_dotplot4 <- DotPlot(LJ_root, features = genes, group.by = "sub.cluster.1", cluster.idents = TRUE, cols = c("grey", "blue"), scale = FALSE, dot.scale = 20) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0), axis.title = element_text(size = 30), legend.text = element_text(size = 35), legend.title = element_text(size = 35), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 30), legend.box.spacing = unit(4, "lines"))
+
+LJ_dotplot4
+
+pdf(file = "LJ_dotplot_curated_subclusters.pdf", width = 30, height = 15)
+LJ_dotplot4
+dev.off()
+```
+
+```{r}
+pdf(file = "UMAP_LJ_clusters.pdf", width = 8, height = 8)
+DimPlot(LJ_root, reduction = "umap60")
+dev.off()
+
+pdf(file = "UMAP_LJ_subclusters.pdf", width = 8, height = 8)
+DimPlot(LJ_root, reduction = "umap60", group.by="sub.cluster.1")    
+dev.off()
+
+DimPlot(LJ_root, reduction = "umap60")
+DimPlot(LJ_root, reduction = "umap60", group.by="sub.cluster.1")  
+```
+
+```{r fig.width=36, fig.height=52}
+FeaturePlot(LJ_root, reduction = "umap60", features= genes_vector) #6
+FeaturePlot(AT_root, reduction = "umap60", features= ATgenes_vector) #6
+```
+
+```{r}
+FeaturePlot(LJ_root, reduction = "umap60", features= 'LotjaGi3g1v0534800')
+```
+
+```{r fig.width=36, fig.height=52}
+FeaturePlot(LJ_root, reduction = "umap60", features= LJ_markers_top5[LJ_markers_top5$cluster == 5,]$gene)
+FeaturePlot(AT_root, reduction = "umap60", features= LJ_markers_top5[LJ_markers_top5$cluster == 5,]$gene)
+```
+
+```{r}
+#Keep 2, 3 and 5 orthologous marker genes per cluster
+LJ_top2 <- LJ_root_markers[grep("^A", rownames(LJ_root_markers)), ] %>% distinct %>% group_by(cluster) %>% top_n(-2, p_val_adj) %>% distinct %>% group_by(cluster) %>% top_n(2, avg_log2FC)
+
+LJ_top3 <- LJ_root_markers[grep("^A", rownames(LJ_root_markers)), ] %>% distinct %>% group_by(cluster) %>% top_n(-3, p_val_adj) %>% distinct %>% group_by(cluster) %>% top_n(3, avg_log2FC)
+
+LJ_top5 <- LJ_root_markers[grep("^A", rownames(LJ_root_markers)), ] %>% distinct %>% group_by(cluster) %>% top_n(-5, p_val_adj) %>% distinct %>% group_by(cluster) %>% top_n(5, avg_log2FC)
+
+# Keep 1 AT cluster annotation per gene: lowest p-value, highest logFC
+AT_root_markers_f <- AT_root_markers %>% distinct %>% group_by(gene) %>% top_n(-1, p_val_adj) %>% distinct %>% group_by(gene) %>% top_n(1, avg_log2FC)
+
+# Annotate LJ markers with AT cluster annotation
+ortho_markers <- inner_join(AT_root_markers_f, LJ_top3, by = 'gene' ) %>% select(c('gene','cluster.x','p_val_adj.x', 'avg_log2FC.x'))
+```
+
+```{r fig.width=12, fig.height=8}
+genes <- list(Columella = c("AT1G49050", "AT3G07800"), 
+              Epidermis = c("AT2G32760", "AT2G32760"), 
+              Trichoblast = c("AT5G05500", "AT5G10870", "AT4G37270", "AT3G10700"),
+              LateralRootCap = c("AT5G01380", "AT1G10830"), 
+              MeristematicCell = c("AT5G66540", "AT5G50740", "AT5G14580", "AT1G74720", "AT3G49725", "AT5G53060", "AT5G49820"), 
+              Stele = c("AT1G49740", "AT3G03990", "AT5G43850"),
+              Atricholbast = c("AT3G16370"),
+              Endodermis = c("AT3G62390"))
+
+genes <- lapply(genes, function(x){unique(x)})
+
+LJ_dotplot5 <- DotPlot(LJ_root, features = genes, group.by = "seurat_clusters", cluster.idents = TRUE, cols = c("red", "blue"), scale = TRUE, dot.scale = 20) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0), axis.title = element_text(size = 30), legend.text = element_text(size = 35), legend.title = element_text(size = 35), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 30), legend.box.spacing = unit(4, "lines"))
+
+LJ_dotplot5
+
+pdf(file = "LJ_dotplot_bestmarkers_scaled.pdf", width = 30, height = 15)
+LJ_dotplot5
+dev.off()
+```
+
+```{r fig.width=12, fig.height=8}
+LJ_dotplot6 <- DotPlot(LJ_root, features = genes, group.by = "seurat_clusters", cluster.idents = TRUE, cols = c("grey", "blue"), scale = FALSE, dot.scale = 20) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0), axis.title = element_text(size = 30), legend.text = element_text(size = 35), legend.title = element_text(size = 35), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 30), legend.box.spacing = unit(4, "lines"))
+
+LJ_dotplot6
+
+pdf(file = "LJ_dotplot_bestmarkers.pdf", width = 30, height = 15)
+LJ_dotplot6
+dev.off()
+```
+
+```{r fig.width=12, fig.height=8}
+LJ_dotplot7 <- DotPlot(LJ_root, features = unique(LJ_top3$gene), group.by = "seurat_clusters", cluster.idents = TRUE, cols = c("red", "blue"), scale = TRUE, dot.scale = 20) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0), axis.title = element_text(size = 30), legend.text = element_text(size = 35), legend.title = element_text(size = 35), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 30), legend.box.spacing = unit(4, "lines"))
+
+LJ_dotplot7
+
+pdf(file = "LJ_dotplot_top3LJ_scaled.pdf", width = 30, height = 15)
+LJ_dotplot7
+dev.off()
+```
+
+```{r fig.width=12, fig.height=8}
+LJ_dotplot8 <- DotPlot(LJ_root, features = unique(LJ_top3$gene), group.by = "seurat_clusters", cluster.idents = TRUE, cols = c("grey", "blue"), scale = FALSE, dot.scale = 20) + theme(axis.text.x = element_text(angle = 45, hjust=1), strip.text.x = element_text(angle = 90, hjust = 0), axis.title = element_text(size = 30), legend.text = element_text(size = 35), legend.title = element_text(size = 35), axis.line = element_line(size = 1), legend.key.size = unit(2, "lines"), axis.text = element_text(size = 30), legend.box.spacing = unit(4, "lines"))
+
+LJ_dotplot8
+
+pdf(file = "LJ_dotplot_top3LJ.pdf", width = 30, height = 15)
+LJ_dotplot8
+dev.off()
+```
+
+```{r}
+FeaturePlot(object = LJ_root, features = 'AT1G49050', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT1G49050', reduction = 'umap60')
+```
+
+```{r}
+#LotjaGi5g1v0119900 Cluster 5 (+ 4)
+FeaturePlot(object = LJ_root, features = 'LotjaGi5g1v0119900', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT5G28010', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT1G70840', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT1G70890', reduction = 'umap60')
+```
+
+```{r}
+#LotjaGi3g1v0485600 Cluster 5
+FeaturePlot(object = LJ_root, features = 'LotjaGi3g1v0485600', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT2G36870', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT3G44990', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT2G36870', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT1G32170', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT1G14720', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT2G01850', reduction = 'umap60')
+```
+
+```{r}
+#AT1G49050 Cluster 5
+LJ_AT1G49050 <- FeaturePlot(LJ_root, features = 'AT1G49050', reduction = 'umap60', pt.size = 2) + labs(title = "AT1G49050-1", x = "UMAP1", y = "UMAP2") + theme(axis.title = element_text(size = 25), legend.text = element_text(size = 30), axis.line = element_line(size = 1), legend.key.size = unit(2.5, "lines"), axis.text = element_text(size = 20))
+
+AT_AT1G49050 <- FeaturePlot(AT_root, features = 'AT1G49050', reduction = 'umap60', pt.size = 2) + labs(title = "AT1G49050", x = "UMAP1", y = "UMAP2") + theme(axis.title = element_text(size = 25), legend.text = element_text(size = 30), axis.line = element_line(size = 1), legend.key.size = unit(2.5, "lines"), axis.text = element_text(size = 20))
+
+AT_AT1G49050 + LJ_AT1G49050
+
+pdf(file = "AT_AT1G49050.pdf", width = 18, height = 10)
+AT_AT1G49050
+dev.off()
+
+pdf(file = "LJ_AT1G49050.pdf", width = 18, height = 10)
+LJ_AT1G49050
+dev.off()
+```
+
+```{r}
+#LotjaGi1g1v0502700 Cluster 2 8 11
+FeaturePlot(object = LJ_root, features = 'LotjaGi1g1v0502700', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT5G15230', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT1G74670', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT5G15230', reduction = 'umap60')
+FeaturePlot(object = AT_root, features = 'AT3G10185', reduction = 'umap60')
+```
+
+```{r fig.height = 15 fig.width = 15}
+LJ_featureplotLJ <- FeaturePlot(object = LJ_root, features = genes_vector, reduction = 'umap60')
+
+pdf(file = "LJ_featureplotLJ.pdf", width = 15, height = 15)
+LJ_featureplotLJ
+dev.off()
+```
+
+```{r fig.height = 15 fig.width = 15}
+LJ_featureplotAT <- FeaturePlot(object = AT_root, features = ATgenes_vector, reduction = 'umap60')
+
+pdf(file = "LJ_featureplotAT.pdf", width = 15, height = 15)
+LJ_featureplotAT
+dev.off()
+```
+
+```{r fig.height = 15 fig.width = 15}
+# Map filtered orthologous marker genes on Arabidopsis UMAP
+LJ_featureplotAT_f <- FeaturePlot(object = AT_root, features = LJ_top3$gene, reduction = 'umap60')
+
+pdf(file = "LJ_featureplotAT_f.pdf", width = 15, height = 15)
+LJ_featureplotAT_f
+dev.off()
+```
+
+```{r fig.height = 15 fig.width = 15}
+# Map filtered orthologous marker genes on Lotus UMAP
+LJ_featureplotLJ_f <- FeaturePlot(object = LJ_root, features = LJ_top3$gene, reduction = 'umap60')
+
+pdf(file = "LJ_featureplotLJ_f.pdf", width = 15, height = 15)
+LJ_featureplotLJ_f
+dev.off()
+```
+
+# Reference cell type annotation (Frank et al.)
+
+```{r}
+DimPlot(LJ_root, reduction = "umap60", group.by = "celltype.id.ref")
+```
